@@ -309,6 +309,18 @@ button:hover { background: var(--bg2); }
 .print-only { display: none; }
 @media print { .print-only { display: block; } .no-print { display: none !important; } }
 
+/* 시간 조정 팝업 */
+.time-popup {
+  position: absolute; background: var(--bg); border: 1px solid var(--border2);
+  border-radius: var(--radius); padding: 8px 10px; z-index: 500; box-shadow: 0 4px 16px rgba(0,0,0,.15);
+  display: flex; align-items: center; gap: 6px; font-size: 13px;
+}
+.time-popup input { width: 60px; font-size: 13px; padding: 4px 6px; }
+.time-popup button { font-size: 12px; padding: 3px 8px; }
+
+/* 주휴일 직접지정 영역 */
+#juyuDowArea { display: flex; }
+
 @media (max-width: 520px) {
   .row2, .row3 { grid-template-columns: 1fr; }
   .summary-grid { grid-template-columns: 1fr; }
@@ -343,7 +355,7 @@ button:hover { background: var(--bg2); }
     </select>
   </div>
 </div>
-<div id="bizSizeInfo" class="info-box">5인 미만: 노동절 출근 시 추가 100% 지급 (가산수당 미적용)</div>
+<div id="bizSizeInfo" class="info-box hidden">5인 미만: 노동절 출근 시 추가 100% 지급 (가산수당 미적용)</div>
 <hr class="div"/>
 
 <!-- 직원 정보 -->
@@ -426,15 +438,25 @@ button:hover { background: var(--bg2); }
 <div class="meal-block">
   <div class="meal-row">
     <label>하루 식대</label>
-    <input id="mealPerDay" type="number" value="9000" oninput="markDirty();updateMealInfo()"/>
+    <input id="mealPerDay" type="number" value="9000" style="width:80px;" oninput="markDirty();updateMealInfo()"/>
     <span style="font-size:12px;color:var(--text2);">원 × 출근일수</span>
     <span class="meal-badge ok" id="mealBadge">-</span>
+  </div>
+  <div style="margin-top:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+    <label style="display:flex;align-items:center;gap:5px;font-size:12px;cursor:pointer;">
+      <input type="checkbox" id="mealManualMode" onchange="toggleMealManual();markDirty()" style="width:14px;height:14px;"/>
+      식대 수동 입력
+    </label>
+    <span id="mealManualArea" class="hidden" style="display:flex;align-items:center;gap:6px;">
+      <input id="mealManual" type="number" placeholder="직접 입력 (원)" style="width:130px;font-size:13px;" oninput="markDirty();updateMealInfo()"/>
+      <span style="font-size:11px;color:var(--text3);">원 (자동계산 무시)</span>
+    </span>
   </div>
   <div class="meal-detail" id="mealDetail">캘린더에서 출근일을 체크하면 자동 계산됩니다. (20만원까지 비과세)</div>
 </div>
 
 <!-- 요일별 시간 -->
-<div class="sec-title">요일별 근무시간 <span style="font-size:10px;font-weight:400;color:var(--text3)">(시급제 주휴수당 계산)</span></div>
+<div class="sec-title">요일별 기본 근무시간 <span style="font-size:10px;font-weight:400;color:var(--text3)">(주 15시간 이상 + 개근 시 주휴수당 자동 계산)</span></div>
 <div class="day-labels">
   <span style="color:var(--text-danger)">일</span><span>월</span><span>화</span><span>수</span><span>목</span><span>금</span><span style="color:var(--text-info)">토</span>
 </div>
@@ -447,6 +469,7 @@ button:hover { background: var(--bg2); }
   <input id="h5" type="number" min="0" max="24" step="0.5" placeholder="0" onchange="renderCal();markDirty()"/>
   <input id="h6" type="number" min="0" max="24" step="0.5" placeholder="0" onchange="renderCal();markDirty()"/>
 </div>
+
 <hr class="div"/>
 
 <!-- 캘린더 -->
@@ -464,7 +487,7 @@ button:hover { background: var(--bg2); }
     <div class="cal-day-hdr sat">토</div>
   </div>
   <div class="cal-legend" id="calLegend">
-    <span><i class="dot dot-work"></i>출근</span><span><i class="dot dot-holi"></i>주휴(자동)</span>
+    <span><i class="dot dot-work"></i>출근 (꾹누르면 시간조정)</span><span><i class="dot dot-holi"></i>주휴(자동)</span>
   </div>
 </div>
 <div class="cal-sum" id="calSummary"></div>
@@ -780,16 +803,29 @@ function getMealBreakdown(){
   if(isMealSkipped()) return{workedCount:0,mealPerDay:0,mealTotal:0,mealExempt:0,mealTaxable:0};
   const keys=Object.keys(workedDays).filter(k=>k.startsWith(`${calYear}-${calMonth}-`));
   const mpd=parseFloat(g('mealPerDay'))||9000;
-  const total=keys.length*mpd;
+  const isManual=document.getElementById('mealManualMode')?.checked;
+  const manualVal=parseFloat(g('mealManual'))||0;
+  const total=isManual&&manualVal>0 ? manualVal : keys.length*mpd;
   return{workedCount:keys.length,mealPerDay:mpd,mealTotal:total,mealExempt:Math.min(total,MEAL_LIMIT),mealTaxable:Math.max(0,total-MEAL_LIMIT)};
 }
 function updateMealInfo(){
   const badge=document.getElementById('mealBadge'); const detail=document.getElementById('mealDetail');
   if(isMealSkipped()){badge.className='meal-badge off';badge.textContent='식대 미적용';detail.textContent='일급제 세후 + 식대 0원 → 일급에 포함.';return;}
   const{workedCount,mealPerDay,mealTotal,mealExempt,mealTaxable}=getMealBreakdown();
+  const isManual=document.getElementById('mealManualMode')?.checked;
   badge.textContent=`합계 ${mealTotal.toLocaleString()}원`;
-  if(mealTaxable>0){badge.className='meal-badge over';detail.innerHTML=`비과세 <b>${mealExempt.toLocaleString()}원</b> + 과세 <b>${mealTaxable.toLocaleString()}원</b>`;}
-  else{badge.className='meal-badge ok';if(workedCount>0)detail.innerHTML=`${workedCount}일 × ${mealPerDay.toLocaleString()}원 = ${mealTotal.toLocaleString()}원 — 전액 비과세`;else detail.textContent='캘린더에서 출근일을 체크하면 자동 계산됩니다.';}
+  if(mealTaxable>0){
+    badge.className='meal-badge over';
+    detail.innerHTML=`비과세 <b>${mealExempt.toLocaleString()}원</b> + 과세 <b>${mealTaxable.toLocaleString()}원</b>`;
+  } else {
+    badge.className='meal-badge ok';
+    if(mealTotal>0){
+      if(isManual) detail.innerHTML=`수동 입력: <b>${mealTotal.toLocaleString()}원</b> — 전액 비과세`;
+      else if(workedCount>0) detail.innerHTML=`${workedCount}일 × ${mealPerDay.toLocaleString()}원 = ${mealTotal.toLocaleString()}원 — 전액 비과세`;
+    } else {
+      detail.textContent='캘린더에서 출근일을 체크하면 자동 계산됩니다.';
+    }
+  }
   updateInsPreview();
 }
 
@@ -906,6 +942,10 @@ function loadEmployee(id){
   setF('scheduledDays',emp.scheduledDays||22);
   document.getElementById('absentMode').value=emp.absentMode||'daily';
   setF('mealPerDay',emp.mealPerDay??9000);
+  // 식대 수동
+  if(emp.mealManualMode){ document.getElementById('mealManualMode').checked=true; document.getElementById('mealManualArea').style.display='flex'; }
+  else { document.getElementById('mealManualMode').checked=false; document.getElementById('mealManualArea').style.display='none'; }
+  setF('mealManual',emp.mealManual||'');
   [0,1,2,3,4,5,6].forEach(i=>document.getElementById('h'+i).value=emp.hours?.[i]??'');
   document.getElementById('familyCount').value=emp.familyCount||1;
   document.getElementById('childCount').value=emp.childCount||0;
@@ -939,6 +979,8 @@ function saveEmployee(){
     monthlySalary:parseFloat(g('monthlySalary'))||0,extraMonthly:parseFloat(g('extraMonthly'))||0,
     scheduledDays:parseInt(g('scheduledDays'))||22,absentMode:document.getElementById('absentMode').value,
     mealPerDay:parseFloat(g('mealPerDay'))||9000,
+    mealManualMode:document.getElementById('mealManualMode')?.checked||false,
+    mealManual:parseFloat(g('mealManual'))||0,
     hours:[0,1,2,3,4,5,6].map(i=>parseFloat(document.getElementById('h'+i).value)||0),
     familyCount:parseInt(g('familyCount'))||1,childCount:parseInt(g('childCount'))||0,
     taxRateRatio:parseFloat(document.getElementById('taxRateRatio').value)||1,
@@ -964,7 +1006,11 @@ function saveEmployee(){
 
 function clearForm(){
   ['empName','ssn','joinDate','bankAcc','hourly','extraHourly','dailyWage','extraDailyWage','monthlySalary','extraMonthly','ov-nps','ov-hi','ov-ei','ov-ltc','ov-tax'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
-  document.getElementById('mealPerDay').value=9000;document.getElementById('scheduledDays').value=22;
+  document.getElementById('mealPerDay').value=9000;
+  document.getElementById('scheduledDays').value=22;
+  document.getElementById('mealManualMode').checked=false;
+  document.getElementById('mealManualArea').style.display='none';
+  setF('mealManual','');
   document.getElementById('empRole').value='약사';document.getElementById('empType').value='regular';
   document.getElementById('payType').value='pretax';document.getElementById('absentMode').value='daily';
   document.getElementById('familyCount').value=1;document.getElementById('childCount').value=0;document.getElementById('taxRateRatio').value=1;
@@ -982,23 +1028,72 @@ function onEmpTypeChange(){
 
 // ═══ 주휴 ═══
 function computeJuyuDays(y,m){
-  const last=new Date(y,m+1,0).getDate();const r=[];
+  // 주 15시간 미만이면 주휴 없음
+  const weeklyHrs=[0,1,2,3,4,5,6].reduce((s,d)=>s+getHrDow(d),0);
+  if(weeklyHrs<15) return [];
+  const last=new Date(y,m+1,0).getDate(); const r=[];
   for(let d=1;d<=last;d++){
-    if(new Date(y,m,d).getDay()===0){
-      const ws=[];
-      for(let b=1;b<=6;b++){const wd=d-b;if(wd<1)continue;if(getHrDow(new Date(y,m,wd).getDay())>0)ws.push(wd);}
-      if(ws.length===0){r.push(d);continue;}
-      if(ws.every(wd=>workedDays[`${y}-${m}-${wd}`]))r.push(d);
-    }
+    if(new Date(y,m,d).getDay()!==0) continue; // 일요일 기준
+    const ws=[];
+    for(let b=1;b<=6;b++){const wd=d-b;if(wd<1)continue;if(getHrDow(new Date(y,m,wd).getDay())>0)ws.push(wd);}
+    if(ws.length===0){r.push(d);continue;}
+    if(ws.every(wd=>workedDays[`${y}-${m}-${wd}`]))r.push(d);
   }
   return r;
 }
 function calcJuyuHours(){
   const wh=[0,1,2,3,4,5,6].reduce((s,d)=>s+getHrDow(d),0);
+  if(wh<15) return 0;
   return computeJuyuDays(calYear,calMonth).length*Math.min(wh/5,8);
 }
 
+// ═══ 식대 수동 토글 ═══
+function toggleMealManual(){
+  const manual=document.getElementById('mealManualMode').checked;
+  const area=document.getElementById('mealManualArea');
+  area.style.display=manual?'flex':'none';
+  area.classList.toggle('hidden',!manual);
+  updateMealInfo();
+}
+
 // ═══ 캘린더 ═══
+let timePopupTimer=null, activePopup=null;
+
+function closeTimePopup(){
+  if(activePopup){activePopup.remove();activePopup=null;}
+}
+
+function openTimePopup(cell, key, currentHrs){
+  closeTimePopup();
+  const popup=document.createElement('div');
+  popup.className='time-popup';
+  popup.innerHTML=`
+    <span>근무시간</span>
+    <input type="number" min="0" max="24" step="0.5" value="${currentHrs}" id="tp-input"/>
+    <span>h</span>
+    <button onclick="applyTimePopup('${key}')">확인</button>
+    <button onclick="closeTimePopup()">✕</button>
+  `;
+  // 위치: 셀 아래
+  const rect=cell.getBoundingClientRect();
+  popup.style.cssText=`position:fixed;top:${rect.bottom+4}px;left:${Math.min(rect.left,window.innerWidth-200)}px;`;
+  document.body.appendChild(popup);
+  activePopup=popup;
+  popup.querySelector('#tp-input').focus();
+  popup.querySelector('#tp-input').select();
+}
+
+function applyTimePopup(key){
+  const val=parseFloat(document.getElementById('tp-input')?.value)||0;
+  if(val<=0){ delete workedDays[key]; }
+  else { workedDays[key]=val; }
+  closeTimePopup(); dirty=true; renderCal();
+}
+
+document.addEventListener('click', e=>{
+  if(activePopup && !activePopup.contains(e.target)) closeTimePopup();
+});
+
 function renderCal(){
   const pm=document.getElementById('payMonth').value;
   if(pm){const p=pm.split('-');calYear=parseInt(p[0]);calMonth=parseInt(p[1])-1;}
@@ -1013,15 +1108,31 @@ function renderCal(){
     const dow=new Date(calYear,calMonth,d).getDay();const key=`${calYear}-${calMonth}-${d}`;
     const cell=document.createElement('div');const isJ=jList.includes(d),isA=absentDays[key];
     cell.className='cal-cell'+(dow===0?' sun-col':dow===6?' sat-col':'');
+    cell.style.position='relative';
     if(isA)cell.classList.add('absent');else if(workedDays[key])cell.classList.add('worked');else if(isJ)cell.classList.add('juyu');
     const num=document.createElement('div');num.className='dnum';num.textContent=d;cell.appendChild(num);
-    if(workedDays[key]&&!isA){const lbl=document.createElement('div');lbl.className='dhrs';lbl.textContent=wageMode==='daily_wage'?`${(parseFloat(g('dailyWage'))||0).toLocaleString()}원`:`${workedDays[key]}h`;cell.appendChild(lbl);}
+    if(workedDays[key]&&!isA){
+      const lbl=document.createElement('div');lbl.className='dhrs';
+      lbl.textContent=wageMode==='daily_wage'?`${(parseFloat(g('dailyWage'))||0).toLocaleString()}원`:`${workedDays[key]}h`;
+      cell.appendChild(lbl);
+    }
     if(isA){const al=document.createElement('div');al.className='albl';al.textContent='결근';cell.appendChild(al);}
     if(isJ&&!workedDays[key]&&!isA){const j=document.createElement('div');j.className='dlbl';j.textContent='주휴';cell.appendChild(j);}
-    cell.addEventListener('click',()=>toggleDay(d,dow,key,isJ));
+
+    // 클릭: 출근 토글 / 꾹누르기: 시간 조정
+    let pressTimer=null;
+    cell.addEventListener('pointerdown', ()=>{
+      pressTimer=setTimeout(()=>{
+        pressTimer=null;
+        if(workedDays[key]) openTimePopup(cell,key,workedDays[key]);
+      },600);
+    });
+    cell.addEventListener('pointerup', ()=>{ if(pressTimer){clearTimeout(pressTimer);pressTimer=null;} });
+    cell.addEventListener('pointerleave', ()=>{ if(pressTimer){clearTimeout(pressTimer);pressTimer=null;} });
+    cell.addEventListener('click', ()=>{ if(!activePopup) toggleDay(d,dow,key,isJ); });
     grid.appendChild(cell);
   }
-  updateCalSummary();updateMealInfo();
+  updateCalSummary();updateMealInfo();updateLaborDay();
 }
 
 function toggleDay(d,dow,key,isJ){
@@ -1030,8 +1141,9 @@ function toggleDay(d,dow,key,isJ){
     else if(workedDays[key]&&!absentDays[key]){delete workedDays[key];absentDays[key]=true;}
     else delete absentDays[key];
   } else {
-    if(isJ&&!workedDays[key])return;
-    if(workedDays[key])delete workedDays[key];else workedDays[key]=getHrDow(dow)||8;
+    // 주휴일 클릭 차단 제거 — 주휴일도 출근 가능
+    if(workedDays[key])delete workedDays[key];
+    else workedDays[key]=getHrDow(dow)||8;
   }
   dirty=true;renderCal();
 }
@@ -1524,11 +1636,16 @@ function printFinalizeModal(){
 // ═══ 사업장 규모 & 노동절 수당 ═══
 function onBizSizeChange(){
   const size = document.getElementById('bizSize').value;
+  const pm = g('payMonth');
+  const isMay = pm && pm.endsWith('-05');
   const info = document.getElementById('bizSizeInfo');
-  if(size==='under5'){
-    info.textContent='5인 미만: 노동절 출근 시 추가 100% 지급 (가산수당 미적용)';
+  if(isMay){
+    info.className='info-box';
+    info.textContent=size==='under5'
+      ?'5인 미만: 노동절 출근 시 추가 100% 지급 (가산수당 미적용)'
+      :'5인 이상: 노동절 출근 시 시급/일급 추가 150%, 월급제 추가 150% 지급 (근로기준법 제56조)';
   } else {
-    info.textContent='5인 이상: 노동절 출근 시 시급/일급 추가 150%, 월급제 추가 150% 지급 (근로기준법 제56조)';
+    info.className='info-box hidden';
   }
   updateLaborDay();
 }
@@ -1537,8 +1654,20 @@ function updateLaborDay(){
   const pm = g('payMonth');
   const isMay = pm && pm.endsWith('-05');
   const section = document.getElementById('laborDaySection');
-  if(!isMay){ section.classList.add('hidden'); return; }
+  const info = document.getElementById('bizSizeInfo');
+  const size = document.getElementById('bizSize').value;
+
+  // 5월에만 노동절 관련 UI 표시
+  if(!isMay){
+    section.classList.add('hidden');
+    info.className='info-box hidden';
+    return;
+  }
   section.classList.remove('hidden');
+  info.className='info-box';
+  info.textContent=size==='under5'
+    ?'5인 미만: 노동절 출근 시 추가 100% 지급 (가산수당 미적용)'
+    :'5인 이상: 노동절 출근 시 시급/일급 추가 150%, 월급제 추가 150% 지급 (근로기준법 제56조)';
   const isOver5 = document.getElementById('bizSize').value==='over5';
   const worked  = document.getElementById('laborDayWorked').checked;
   const desc    = document.getElementById('laborDayDesc');
@@ -1612,6 +1741,7 @@ function restoreData(e){
 
 // 이벤트 리스너
 document.getElementById('mealPerDay').addEventListener('input',updateMealInfo);
+document.getElementById('mealManual').addEventListener('input',updateMealInfo);
 ['hourly','dailyWage','monthlySalary','scheduledDays'].forEach(id=>{const el=document.getElementById(id);if(el)el.addEventListener('input',()=>{updatePreview();updateLaborDay();});});
 ['familyCount','childCount','taxRateRatio'].forEach(id=>{const el=document.getElementById(id);if(el)el.addEventListener('change',()=>{updateInsPreview();markDirty();});});
 
