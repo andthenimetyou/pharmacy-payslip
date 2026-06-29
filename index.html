@@ -469,6 +469,23 @@ button:hover { background: var(--bg2); }
   <input id="h5" type="number" min="0" max="24" step="0.5" placeholder="0" onchange="renderCal();markDirty()"/>
   <input id="h6" type="number" min="0" max="24" step="0.5" placeholder="0" onchange="renderCal();markDirty()"/>
 </div>
+<div class="row2" style="margin-bottom:0;">
+  <div class="field">
+    <label>주휴일 요일</label>
+    <select id="juyuDow" onchange="renderCal();markDirty()">
+      <option value="0">일요일 (기본)</option>
+      <option value="1">월요일</option>
+      <option value="2">화요일</option>
+      <option value="3">수요일</option>
+      <option value="4">목요일</option>
+      <option value="5">금요일</option>
+      <option value="6">토요일</option>
+    </select>
+  </div>
+  <div class="field" style="justify-content:flex-end;font-size:11px;color:var(--text3);padding-bottom:4px;">
+    목·금·토·일 근무자는 월요일 등<br>근무일이 아닌 날로 설정하세요
+  </div>
+</div>
 
 <hr class="div"/>
 
@@ -942,6 +959,7 @@ function loadEmployee(id){
   setF('scheduledDays',emp.scheduledDays||22);
   document.getElementById('absentMode').value=emp.absentMode||'daily';
   setF('mealPerDay',emp.mealPerDay??9000);
+  if(emp.juyuDow!=null) document.getElementById('juyuDow').value=emp.juyuDow;
   // 식대 수동
   if(emp.mealManualMode){ document.getElementById('mealManualMode').checked=true; document.getElementById('mealManualArea').style.display='flex'; }
   else { document.getElementById('mealManualMode').checked=false; document.getElementById('mealManualArea').style.display='none'; }
@@ -981,6 +999,7 @@ function saveEmployee(){
     mealPerDay:parseFloat(g('mealPerDay'))||9000,
     mealManualMode:document.getElementById('mealManualMode')?.checked||false,
     mealManual:parseFloat(g('mealManual'))||0,
+    juyuDow:parseInt(g('juyuDow'))||0,
     hours:[0,1,2,3,4,5,6].map(i=>parseFloat(document.getElementById('h'+i).value)||0),
     familyCount:parseInt(g('familyCount'))||1,childCount:parseInt(g('childCount'))||0,
     taxRateRatio:parseFloat(document.getElementById('taxRateRatio').value)||1,
@@ -1007,6 +1026,7 @@ function saveEmployee(){
 function clearForm(){
   ['empName','ssn','joinDate','bankAcc','hourly','extraHourly','dailyWage','extraDailyWage','monthlySalary','extraMonthly','ov-nps','ov-hi','ov-ei','ov-ltc','ov-tax'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
   document.getElementById('mealPerDay').value=9000;
+  document.getElementById('juyuDow').value=0;
   document.getElementById('scheduledDays').value=22;
   document.getElementById('mealManualMode').checked=false;
   document.getElementById('mealManualArea').style.display='none';
@@ -1027,17 +1047,24 @@ function onEmpTypeChange(){
 }
 
 // ═══ 주휴 ═══
+function getJuyuDow(){ return parseInt(document.getElementById('juyuDow')?.value ?? 0); }
+
 function computeJuyuDays(y,m){
-  // 주 15시간 미만이면 주휴 없음
   const weeklyHrs=[0,1,2,3,4,5,6].reduce((s,d)=>s+getHrDow(d),0);
   if(weeklyHrs<15) return [];
+  const juyuDow=getJuyuDow();
   const last=new Date(y,m+1,0).getDate(); const r=[];
   for(let d=1;d<=last;d++){
-    if(new Date(y,m,d).getDay()!==0) continue; // 일요일 기준
+    if(new Date(y,m,d).getDay()!==juyuDow) continue;
     const ws=[];
-    for(let b=1;b<=6;b++){const wd=d-b;if(wd<1)continue;if(getHrDow(new Date(y,m,wd).getDay())>0)ws.push(wd);}
+    for(let b=1;b<=6;b++){
+      const wd=d-b; if(wd<1) continue;
+      const wdow=new Date(y,m,wd).getDay();
+      if(wdow===juyuDow) break; // 이전 주휴일 만나면 stop
+      if(getHrDow(wdow)>0) ws.push(wd);
+    }
     if(ws.length===0){r.push(d);continue;}
-    if(ws.every(wd=>workedDays[`${y}-${m}-${wd}`]))r.push(d);
+    if(ws.every(wd=>workedDays[`${y}-${m}-${wd}`])) r.push(d);
   }
   return r;
 }
