@@ -1286,11 +1286,26 @@ function generate(){
     const eiR=(ov.ei!==null?ov.ei/100:LAW.ei);
 
     if(empType==='daily'){
-      // 일용직: 4대보험 없음, 소득세=(일당-15만)×6%×45%+지방세
-      const dailyBase=wageMode==='daily_wage'?parseFloat(g('dailyWage'))||0:(gross/Math.max(1,wdc));
-      const it=wdc*calcDailyTax(dailyBase);
+      // 일용직 고용보험: 0.9% (국민연금·건강보험은 월 60시간 미만 시 미적용)
+      const ei=Math.round(gross*eiR);
+      // 일당 계산: 급여모드에 따라 정확히 산출
+      let dailyBase=0;
+      if(wageMode==='daily_wage') dailyBase=parseFloat(g('dailyWage'))||0;
+      else if(wageMode==='hourly'){
+        // 시급 × 하루 근무시간 (출근일 평균)
+        const hr=parseFloat(g('hourly'))||0;
+        const keys=Object.keys(workedDays).filter(k=>k.startsWith(`${calYear}-${calMonth}-`));
+        const avgHrs=keys.length>0 ? keys.reduce((s,k)=>s+workedDays[k],0)/keys.length : 0;
+        dailyBase=Math.round(hr*avgHrs);
+      } else {
+        // 월급제 일용직: 일할 단가
+        const sal=parseFloat(g('monthlySalary'))||0;
+        const schDays=parseInt(g('scheduledDays'))||22;
+        dailyBase=Math.round(sal/schDays);
+      }
+      const it=wdc>0 ? wdc*calcDailyTax(dailyBase) : 0;
       const lt2=Math.round(it*0.1);
-      return{np:0,hi:0,lt:0,ei:0,it,lt2,total:it+lt2};
+      return{np:0,hi:0,lt:0,ei,it,lt2,total:ei+it+lt2};
     } else if(empType==='freelance'){
       // 프리랜서: 3.3%만
       return{np:0,hi:0,lt:0,ei:0,it:Math.round(taxable*0.03),lt2:Math.round(taxable*0.003),total:Math.round(taxable*0.033)};
@@ -1316,13 +1331,33 @@ function generate(){
     let estGross, r;
 
     if(empType==='daily'){
-      // 일용직: 소득세만 역산 (4대보험 없음)
-      // 소득세=(일당-15만)×6%×45% → 일당 기준이라 총액 역산 불필요, 직접 계산
-      const dailyBase=wageMode==='daily_wage'?parseFloat(g('dailyWage'))||0:(netTarget/Math.max(1,wdc));
-      const it=wdc*calcDailyTax(dailyBase);
+      // 일용직 세후 역산: 고용보험(0.9%) + 소득세 포함
+      const eiR2=(ov.ei!==null?ov.ei/100:LAW.ei);
+      let dailyBase=0;
+      if(wageMode==='daily_wage') dailyBase=parseFloat(g('dailyWage'))||0;
+      else if(wageMode==='hourly'){
+        const hr=parseFloat(g('hourly'))||0;
+        const keys=Object.keys(workedDays).filter(k=>k.startsWith(`${calYear}-${calMonth}-`));
+        const avgHrs=keys.length>0?keys.reduce((s,k)=>s+workedDays[k],0)/keys.length:0;
+        dailyBase=Math.round(hr*avgHrs);
+      } else {
+        dailyBase=Math.round((parseFloat(g('monthlySalary'))||0)/(parseInt(g('scheduledDays'))||22));
+      }
+      const it=wdc>0?wdc*calcDailyTax(dailyBase):0;
       const lt2=Math.round(it*0.1);
-      estGross=netTarget+it+lt2;
-      r={np:0,hi:0,lt:0,ei:0,it,lt2,total:it+lt2};
+      // 역산: 실수령 = 세전 - 고용보험 - 소득세 - 지방세
+      // 고용보험은 세전 기준이므로 반복수렴
+      let estGross2=netTarget*1.02;
+      for(let i=0;i<20;i++){
+        const ei2=Math.round(estGross2*eiR2);
+        const estNet2=estGross2-ei2-it-lt2;
+        const diff=netTarget-estNet2;
+        if(Math.abs(diff)<1) break;
+        estGross2+=diff;
+      }
+      estGross=Math.round(estGross2);
+      const ei2=Math.round(estGross*eiR2);
+      r={np:0,hi:0,lt:0,ei:ei2,it,lt2,total:ei2+it+lt2};
     } else if(empType==='freelance'){
       // 프리랜서: 3.3% 역산 → 세전 = 실수령 ÷ 0.967
       estGross=Math.round(netTarget/0.967);
@@ -1391,9 +1426,20 @@ function generate(){
   const txL=empType==='regular'?(ov.tax!==null&&ov.tax>0?'소득세 (직접입력)':`소득세 (간이세액표·가족${fam}인·${Math.round(ratio*100)}%)`):empType==='daily'?'소득세 (일용직)':'소득세 (3%)';
   if(posttax){
     // 세후 역산: 실제 공제 내역 표시
-    if(empType==='freelance') dedRows+=row(txL,incomeTax,'minus')+row('지방소득세 (0.3%)',localTax,'minus');
-    else dedRows+=row(npsL,npsAmt,'minus')+row(hiL,hiAmt,'minus')+row(ltcL,ltcAmt,'minus')+row(eiL,eiAmt,'minus')+row(txL,incomeTax,'minus')+row('지방소득세 (소득세×10%)',localTax,'minus');
-    dedRows+=`<tr><td class="sl" style="font-size:11px;color:var(--text2)">※ 세후 실수령 역산 결과</td><td class="sa" style="font-size:11px;color:var(--text2)">세전 ${won(displayGross)}</td></tr>`;
+    if(empType==='daily'){
+      if(eiAmt>0) dedRows+=row(eiL,eiAmt,'minus');
+      dedRows+=row(txL,incomeTax,'minus')+row('지방소득세 (소득세×10%)',localTax,'minus');
+      dedRows+=`<tr><td class="sl" style="font-size:11px;color:var(--text2)">※ 세후 실수령 역산 결과</td><td class="sa" style="font-size:11px;color:var(--text2)">세전 ${won(displayGross)}</td></tr>`;
+    } else if(empType==='freelance'){
+      dedRows+=row(txL,incomeTax,'minus')+row('지방소득세 (0.3%)',localTax,'minus');
+    } else {
+      dedRows+=row(npsL,npsAmt,'minus')+row(hiL,hiAmt,'minus')+row(ltcL,ltcAmt,'minus')+row(eiL,eiAmt,'minus')+row(txL,incomeTax,'minus')+row('지방소득세 (소득세×10%)',localTax,'minus');
+      dedRows+=`<tr><td class="sl" style="font-size:11px;color:var(--text2)">※ 세후 실수령 역산 결과</td><td class="sa" style="font-size:11px;color:var(--text2)">세전 ${won(displayGross)}</td></tr>`;
+    }
+  } else if(empType==='daily'){
+    // 일용직 세전: 고용보험 + 소득세
+    if(eiAmt>0) dedRows+=row(eiL,eiAmt,'minus');
+    dedRows+=row(txL,incomeTax,'minus')+row('지방소득세 (소득세×10%)',localTax,'minus');
   } else if(empType==='freelance'){
     dedRows+=row(txL,incomeTax,'minus')+row('지방소득세 (0.3%)',localTax,'minus');
   } else {
