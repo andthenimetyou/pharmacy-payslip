@@ -1052,26 +1052,49 @@ function getJuyuDow(){ return parseInt(document.getElementById('juyuDow')?.value
 function computeJuyuDays(y,m){
   const weeklyHrs=[0,1,2,3,4,5,6].reduce((s,d)=>s+getHrDow(d),0);
   if(weeklyHrs<15) return [];
+
   const juyuDow=getJuyuDow();
-  const last=new Date(y,m+1,0).getDate(); const r=[];
+  const last=new Date(y,m+1,0).getDate();
+  const r=[];
+
   for(let d=1;d<=last;d++){
     if(new Date(y,m,d).getDay()!==juyuDow) continue;
+
+    // 이번 주 소정근로일 수집 (주휴일 기준으로 직전 7일 중 소정근로 요일)
+    // 날짜가 이전 달에 걸쳐도 Date 객체로 정확히 처리
     const ws=[];
-    for(let b=1;b<=6;b++){
-      const wd=d-b; if(wd<1) continue;
-      const wdow=new Date(y,m,wd).getDay();
-      if(wdow===juyuDow) break; // 이전 주휴일 만나면 stop
-      if(getHrDow(wdow)>0) ws.push(wd);
+    for(let b=1;b<=7;b++){
+      // 절대 날짜로 계산 (이전 달 경계 처리)
+      const absDate=new Date(y,m,d-b);
+      const wd_dow=absDate.getDay();
+      if(wd_dow===juyuDow) break; // 이전 주휴일 만나면 stop
+      if(getHrDow(wd_dow)>0){
+        // 이번 달 날짜인 경우만 출근 여부 체크 키 생성
+        const wd_y=absDate.getFullYear();
+        const wd_m=absDate.getMonth();
+        const wd_d=absDate.getDate();
+        ws.push({y:wd_y,m:wd_m,d:wd_d});
+      }
     }
-    if(ws.length===0){r.push(d);continue;}
-    if(ws.every(wd=>workedDays[`${y}-${m}-${wd}`])) r.push(d);
+
+    if(ws.length===0){ r.push(d); continue; }
+
+    // 모두 출근했는지 확인 (이전 달 날짜는 이번 달 캘린더에 없으므로 개근으로 간주)
+    const allWorked=ws.every(({y:wy,m:wm,d:wd})=>{
+      if(wm!==m) return true; // 이전 달 날짜 → 개근 간주
+      return !!workedDays[`${wy}-${wm}-${wd}`];
+    });
+    if(allWorked) r.push(d);
   }
   return r;
 }
+
 function calcJuyuHours(){
   const wh=[0,1,2,3,4,5,6].reduce((s,d)=>s+getHrDow(d),0);
   if(wh<15) return 0;
-  return computeJuyuDays(calYear,calMonth).length*Math.min(wh/5,8);
+  // 주휴시간 = 1주 소정근로시간 ÷ 소정근로일수 × 1일 (최대 8시간)
+  const schedDays=[0,1,2,3,4,5,6].filter(d=>getHrDow(d)>0).length||5;
+  return computeJuyuDays(calYear,calMonth).length*Math.min(wh/schedDays,8);
 }
 
 // ═══ 식대 수동 토글 ═══
