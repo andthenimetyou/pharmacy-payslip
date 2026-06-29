@@ -173,6 +173,10 @@ button:hover { background: var(--bg2); }
 .cal-cell .albl { font-size: 9px; color: var(--text-danger); }
 .cal-legend { display: flex; gap: 12px; padding: 8px 14px; background: var(--bg2); font-size: 11px; color: var(--text2); flex-wrap: wrap; }
 .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; margin-right: 4px; }
+.cal-cell.closed { background: #f3e8ff; }
+.cal-cell.closed .dnum { color: #7c3aed; }
+.cal-cell .clbl { font-size: 9px; color: #7c3aed; }
+.dot-closed { background: #f3e8ff; border: .5px solid #7c3aed; }
 .dot-work { background: var(--bg-success); border: 1px solid #86efac; }
 .dot-holi { background: var(--bg-warning); border: 1px solid #fcd34d; }
 .dot-abs  { background: var(--bg-danger);  border: 1px solid #fca5a5; }
@@ -504,7 +508,9 @@ button:hover { background: var(--bg2); }
     <div class="cal-day-hdr sat">토</div>
   </div>
   <div class="cal-legend" id="calLegend">
-    <span><i class="dot dot-work"></i>출근 (꾹누르면 시간조정)</span><span><i class="dot dot-holi"></i>주휴(자동)</span>
+    <span><i class="dot dot-work"></i>출근 (꾹누르면 시간조정)</span>
+    <span><i class="dot dot-holi"></i>주휴(자동)</span>
+    <span><i class="dot dot-closed"></i>약국휴무 (우클릭/길게)</span>
   </div>
 </div>
 <div class="cal-sum" id="calSummary"></div>
@@ -681,7 +687,14 @@ const SUPABASE_KEY  = 'YOUR_SUPABASE_ANON_KEY'; // Project Settings > API > anon
 
 const USE_SUPABASE = SUPABASE_URL !== 'YOUR_SUPABASE_URL';
 
-let calYear, calMonth, workedDays={}, absentDays={}, employees={}, currentEmpId=null, dirty=false, wageMode='hourly', lastSlipData=null;
+let calYear, calMonth, workedDays={}, absentDays={}, closedDays={}, employees={}, currentEmpId=null, dirty=false, wageMode='hourly', lastSlipData=null;
+
+// 약국 공통 휴무일 (직원과 무관하게 사업장 전체 공유)
+let sharedClosedDays = {};
+const SK_CLOSED = 'pharm_closed_v1';
+
+function loadClosedDays(){ try{ const r=localStorage.getItem(SK_CLOSED); if(r) sharedClosedDays=JSON.parse(r); }catch(e){ sharedClosedDays={}; } }
+function saveClosedDays(){ try{ localStorage.setItem(SK_CLOSED,JSON.stringify(sharedClosedDays)); }catch(e){} }
 
 // ═══ 저장소 — Supabase 우선, 없으면 localStorage ═══
 async function loadSt(){
@@ -753,6 +766,7 @@ function showSyncStatus(msg, type){
 
 async function init(){
   await loadSt();
+  loadClosedDays();
   const now=new Date(); calYear=now.getFullYear(); calMonth=now.getMonth();
   document.getElementById('payMonth').value=`${calYear}-${String(calMonth+1).padStart(2,'0')}`;
   document.getElementById('payMonth').addEventListener('change',onPayMonthChange);
@@ -943,7 +957,7 @@ function renderEmpBar(){
 
 function newEmployee(){
   if(dirty&&currentEmpId&&!confirm('저장하지 않은 변경사항이 있습니다. 새 직원으로 넘어가시겠습니까?'))return;
-  currentEmpId='emp_'+Date.now();workedDays={};absentDays={};clearForm();renderEmpBar();renderCal();dirty=false;
+  currentEmpId='emp_'+Date.now();workedDays={};absentDays={};closedDays={};clearForm();renderEmpBar();renderCal();dirty=false;
 }
 
 function loadEmployee(id){
@@ -982,7 +996,7 @@ function deleteEmployee(e,id){
   if(!confirm(`'${employees[id]?.name||'직원'}'을 삭제하시겠습니까?`))return;
   delete employees[id];
   delete monthlyResults[id];
-  if(currentEmpId===id){currentEmpId=null;clearForm();workedDays={};absentDays={};}
+  if(currentEmpId===id){currentEmpId=null;clearForm();workedDays={};absentDays={};closedDays={};}
   deleteEmpFromCloud(id);
   saveSt();renderEmpBar();renderCal();updateFinalizeBar();
 }
@@ -1079,9 +1093,11 @@ function computeJuyuDays(y,m){
 
     if(ws.length===0){ r.push(d); continue; }
 
-    // 모두 출근했는지 확인 (이전 달 날짜는 이번 달 캘린더에 없으므로 개근으로 간주)
+    // 모두 출근했는지 확인 (이전 달 날짜 또는 약국휴무일은 개근으로 간주)
     const allWorked=ws.every(({y:wy,m:wm,d:wd})=>{
-      if(wm!==m) return true; // 이전 달 날짜 → 개근 간주
+      if(wm!==m) return true; // 이전 달 → 개근 간주
+      if(closedDays[`${wy}-${wm}-${wd}`]) return true; // 약국휴무 → 개근 간주
+      if(sharedClosedDays[`${wy}-${wm}-${wd}`]) return true; // 공유 약국휴무 → 개근 간주
       return !!workedDays[`${wy}-${wm}-${wd}`];
     });
     if(allWorked) r.push(d);
@@ -1156,22 +1172,29 @@ function renderCal(){
   const jList=wageMode==='hourly'?computeJuyuDays(calYear,calMonth):[];
   for(let d=1;d<=lastDate;d++){
     const dow=new Date(calYear,calMonth,d).getDay();const key=`${calYear}-${calMonth}-${d}`;
-    const cell=document.createElement('div');const isJ=jList.includes(d),isA=absentDays[key];
+    const cell=document.createElement('div');
+    const isJ=jList.includes(d), isA=absentDays[key], isClosed=sharedClosedDays[key];
     cell.className='cal-cell'+(dow===0?' sun-col':dow===6?' sat-col':'');
     cell.style.position='relative';
-    if(isA)cell.classList.add('absent');else if(workedDays[key])cell.classList.add('worked');else if(isJ)cell.classList.add('juyu');
+    if(isA) cell.classList.add('absent');
+    else if(isClosed) cell.classList.add('closed');
+    else if(workedDays[key]) cell.classList.add('worked');
+    else if(isJ) cell.classList.add('juyu');
+
     const num=document.createElement('div');num.className='dnum';num.textContent=d;cell.appendChild(num);
-    if(workedDays[key]&&!isA){
+    if(workedDays[key]&&!isA&&!isClosed){
       const lbl=document.createElement('div');lbl.className='dhrs';
       lbl.textContent=wageMode==='daily_wage'?`${(parseFloat(g('dailyWage'))||0).toLocaleString()}원`:`${workedDays[key]}h`;
       cell.appendChild(lbl);
     }
     if(isA){const al=document.createElement('div');al.className='albl';al.textContent='결근';cell.appendChild(al);}
-    if(isJ&&!workedDays[key]&&!isA){const j=document.createElement('div');j.className='dlbl';j.textContent='주휴';cell.appendChild(j);}
+    if(isClosed){const cl=document.createElement('div');cl.className='clbl';cl.textContent='휴무';cell.appendChild(cl);}
+    if(isJ&&!workedDays[key]&&!isA&&!isClosed){const j=document.createElement('div');j.className='dlbl';j.textContent='주휴';cell.appendChild(j);}
 
-    // 클릭: 출근 토글 / 꾹누르기: 시간 조정
+    // 좌클릭: 출근 토글 / 꾹누르기: 시간조정 / 우클릭: 약국휴무 토글
     let pressTimer=null;
-    cell.addEventListener('pointerdown', ()=>{
+    cell.addEventListener('pointerdown', e=>{
+      if(e.button===2) return; // 우클릭은 contextmenu에서 처리
       pressTimer=setTimeout(()=>{
         pressTimer=null;
         if(workedDays[key]) openTimePopup(cell,key,workedDays[key]);
@@ -1180,6 +1203,22 @@ function renderCal(){
     cell.addEventListener('pointerup', ()=>{ if(pressTimer){clearTimeout(pressTimer);pressTimer=null;} });
     cell.addEventListener('pointerleave', ()=>{ if(pressTimer){clearTimeout(pressTimer);pressTimer=null;} });
     cell.addEventListener('click', ()=>{ if(!activePopup) toggleDay(d,dow,key,isJ); });
+    cell.addEventListener('contextmenu', e=>{
+      e.preventDefault();
+      toggleClosed(key);
+    });
+    // 모바일 길게누르기 → 약국휴무 (출근 체크된 날은 시간조정 우선)
+    let mobileTimer=null;
+    cell.addEventListener('touchstart', e=>{
+      mobileTimer=setTimeout(()=>{
+        mobileTimer=null;
+        if(!workedDays[key]) { toggleClosed(key); }
+        else { openTimePopup(cell,key,workedDays[key]); }
+      },700);
+    },{passive:true});
+    cell.addEventListener('touchend', ()=>{ if(mobileTimer){clearTimeout(mobileTimer);mobileTimer=null;} });
+    cell.addEventListener('touchmove', ()=>{ if(mobileTimer){clearTimeout(mobileTimer);mobileTimer=null;} });
+
     grid.appendChild(cell);
   }
   updateCalSummary();updateMealInfo();updateLaborDay();
@@ -1196,6 +1235,17 @@ function toggleDay(d,dow,key,isJ){
     else workedDays[key]=getHrDow(dow)||8;
   }
   dirty=true;renderCal();
+}
+
+function toggleClosed(key){
+  if(sharedClosedDays[key]){
+    delete sharedClosedDays[key];
+  } else {
+    // 해당 날짜의 모든 직원 출근/결근 표시는 유지, 휴무만 공유로 추가
+    sharedClosedDays[key]=true;
+  }
+  saveClosedDays();
+  dirty=true; renderCal();
 }
 
 function onPayMonthChange(){const p=g('payMonth').split('-');calYear=parseInt(p[0]);calMonth=parseInt(p[1])-1;renderCal();updateLaborDay();}
@@ -1758,7 +1808,7 @@ function getLaborDayExtra(){
 
 // ═══ 백업 / 복원 ═══
 function backupData(){
-  const data={employees,version:'v5',savedAt:new Date().toISOString()};
+  const data={employees, sharedClosedDays, version:'v5', savedAt:new Date().toISOString()};
   const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'});
   const url=URL.createObjectURL(blob);
   const a=document.createElement('a');
@@ -1779,8 +1829,9 @@ function restoreData(e){
       const cnt=Object.keys(data.employees).length;
       if(!confirm(`백업 파일을 불러오면 현재 데이터를 덮어씁니다.\n저장된 직원 수: ${cnt}명\n계속하시겠습니까?`)) return;
       employees=data.employees;
+      if(data.sharedClosedDays){ sharedClosedDays=data.sharedClosedDays; saveClosedDays(); }
       saveSt(); renderEmpBar(); clearForm();
-      workedDays={}; absentDays={}; currentEmpId=null;
+      workedDays={}; absentDays={}; closedDays={}; currentEmpId=null;
       updateFinalizeBar();
       alert('✅ 복원 완료! 직원 목록을 확인하세요.');
     } catch(err){ alert('❌ 파일 형식이 올바르지 않습니다.'); }
